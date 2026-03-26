@@ -10,10 +10,10 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.persistence.Entity;
 import javax.persistence.Id;
-import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 @SpringBootApplication
@@ -55,6 +55,7 @@ public class Application {
 }
 
 @Service
+@Transactional
 class WordCountService {
 
 	private final RabbitTemplate rabbitTemplate;
@@ -68,15 +69,14 @@ class WordCountService {
 	public void processWords(String message) {
 		String[] words = message.split(" ");
 		for (String word : words) {
-			AtomicLong count = wordCountRepository.findById(word)
-					.map(WordCount::getCount)
-					.orElseGet(() -> {
-						WordCount newCount = new WordCount(word, 0L);
-						wordCountRepository.save(newCount);
-						return 0L;
-					});
-			count.incrementAndGet();
-			rabbitTemplate.convertAndSend("word-counters", new WordCount(word, count.get()));
+			WordCount wordCount = wordCountRepository.findById(word).orElse(null);
+			if (wordCount == null) {
+				wordCount = new WordCount(word, 0L);
+				wordCountRepository.save(wordCount);
+			}
+			wordCount.setCount(wordCount.getCount() + 1);
+			wordCountRepository.save(wordCount);
+			rabbitTemplate.convertAndSend("word-counters", new WordCount(word, wordCount.getCount()));
 		}
 	}
 }
@@ -113,43 +113,3 @@ class WordCount {
 
 interface WordCountRepository extends JpaRepository<WordCount, String> {
 }
-
-// existing code
-/*
-package io.rcardin.spring.kafka.stream;
-
-import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.streams.KeyValue;
-import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.KStream;
-import org.apache.kafka.streams.kstream.Produced;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.annotation.Bean;
-import org.springframework.kafka.annotation.EnableKafkaStreams;
-
-import java.util.Arrays;
-
-@EnableKafkaStreams
-@SpringBootApplication
-public class Application {
-
-	public static void main(String[] args) {
-		SpringApplication.run(Application.class, args);
-	}
-
-	@Bean
-	public KStream<String, Long> kStreamWordCounter(StreamsBuilder streamsBuilder) {
-		final KStream<String, Long> wordCountStream = streamsBuilder
-				.stream("words", Consumed.with(Serdes.String(), Serdes.String()))
-				.flatMapValues(word -> Arrays.asList(word.split(" ")))
-				.map(((key, value) -> new KeyValue<>(value, value)))
-				.groupByKey()
-				.count()
-				.toStream();
-		wordCountStream.to("word-counters", Produced.with(Serdes.String(), Serdes.Long()));
-		return wordCountStream;
-	}
-}
-*/
